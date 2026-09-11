@@ -1,5 +1,6 @@
 import hashlib
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,9 +10,19 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "electric_money_v14.py"
 
-spec = importlib.util.spec_from_file_location("electric_money_v14", SOURCE)
+spec = importlib.util.spec_from_file_location(
+    "electric_money_v14",
+    SOURCE,
+)
+
 em = importlib.util.module_from_spec(spec)
+
+# Required so that dataclasses and other module-level
+# Python features can correctly resolve the module.
+sys.modules[spec.name] = em
+
 spec.loader.exec_module(em)
+
 
 Wallet = em.Wallet
 Transaction = em.Transaction
@@ -104,7 +115,6 @@ def test_public_key_tampering_is_rejected():
     signature = wallet.sign(message)
 
     public_key = bytearray.fromhex(wallet.public_key_hex)
-
     public_key[-1] ^= 1
 
     assert not Wallet.verify(
@@ -239,6 +249,7 @@ def test_transaction_txid_changes_when_signature_changes():
 
     tampered_signature = bytearray.fromhex(tx.signature)
     tampered_signature[0] ^= 1
+
     tx.signature = bytes(tampered_signature).hex()
 
     new_txid = tx.calculate_id()
@@ -247,7 +258,9 @@ def test_transaction_txid_changes_when_signature_changes():
 
 
 def test_direct_secp256k1_round_trip():
-    private_key = em.SigningKey.generate(curve=em.SECP256k1)
+    private_key = em.SigningKey.generate(
+        curve=em.SECP256k1
+    )
 
     public_key = private_key.verifying_key
 
