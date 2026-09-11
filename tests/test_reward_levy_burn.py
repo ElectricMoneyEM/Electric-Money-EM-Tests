@@ -56,20 +56,17 @@ def test_initial_block_reward_is_25_em():
 
 def test_first_halving_reward_is_correct():
     height = em.HALVING_INTERVAL
-
     assert em.block_subsidy(height) == (25 * em.COIN) // 2
 
 
 def test_second_halving_reward_is_correct():
     height = em.HALVING_INTERVAL * 2
-
     assert em.block_subsidy(height) == (25 * em.COIN) // 4
 
 
 def test_valid_miner_reward_is_accepted(tmp_path):
     chain = make_chain(tmp_path)
     miner = Wallet()
-
     block = mine_valid_candidate(chain, miner)
 
     ok, reason, new_state = chain.validate_block(
@@ -92,7 +89,6 @@ def test_valid_miner_reward_is_accepted(tmp_path):
 def test_tampered_miner_reward_is_rejected(tmp_path):
     chain = make_chain(tmp_path)
     miner = Wallet()
-
     block = mine_valid_candidate(chain, miner)
 
     block.transactions[-1]["amount"] += 1
@@ -105,13 +101,12 @@ def test_tampered_miner_reward_is_rejected(tmp_path):
     )
 
     assert not ok
-    assert reason == "invalid block hash"
+    assert reason == "invalid miner reward"
 
 
 def test_tampered_reward_issuance_is_rejected(tmp_path):
     chain = make_chain(tmp_path)
     miner = Wallet()
-
     block = mine_valid_candidate(chain, miner)
 
     block.transactions[-1]["issuance"] += 1
@@ -124,13 +119,12 @@ def test_tampered_reward_issuance_is_rejected(tmp_path):
     )
 
     assert not ok
-    assert reason == "invalid block hash"
+    assert reason == "invalid reward issuance"
 
 
 def test_reward_id_cannot_be_reused_after_reward_tampering(tmp_path):
     chain = make_chain(tmp_path)
     miner = Wallet()
-
     block = mine_valid_candidate(chain, miner)
 
     block.transactions[-1]["tx_id"] = "f" * 128
