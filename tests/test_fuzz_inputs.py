@@ -8,6 +8,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "electric_money_v14.py"
 
+
 spec = importlib.util.spec_from_file_location(
     "electric_money_v14",
     MODULE_PATH,
@@ -92,6 +93,7 @@ def random_block_dict(rng):
         "hash": random_value(rng),
         "miner": random_value(rng),
         "reward": random_value(rng),
+        "extra_data": random_value(rng),
     }
 
 
@@ -115,16 +117,11 @@ def test_random_transaction_inputs_do_not_crash(tmp_path):
 
         try:
             result = chain.validate_transaction(tx)
-        except (
-            KeyError,
-            TypeError,
-            ValueError,
-            AttributeError,
-            IndexError,
-        ):
+        except Exception as exc:
             assert False, (
                 "Random transaction caused an unexpected exception:\n"
-                f"{data!r}"
+                f"{data!r}\n"
+                f"Exception: {type(exc).__name__}: {exc}"
             )
 
         assert isinstance(result, tuple)
@@ -135,8 +132,7 @@ def test_random_block_inputs_do_not_crash(tmp_path):
     rng = random.Random(0xB10C2026)
 
     chain = make_chain(tmp_path)
-
-    previous = chain.chain[-1]
+    genesis = chain.chain[0]
 
     for _ in range(500):
         data = random_block_dict(rng)
@@ -151,23 +147,15 @@ def test_random_block_inputs_do_not_crash(tmp_path):
         ):
             continue
 
+        candidate = [genesis, block]
+
         try:
-            result = chain.validate_block(
-                block,
-                previous,
-                chain.state_before_block(previous),
-                chain.chain[:-1],
-            )
-        except (
-            KeyError,
-            TypeError,
-            ValueError,
-            AttributeError,
-            IndexError,
-        ):
+            result = chain.validate_chain(candidate)
+        except Exception as exc:
             assert False, (
                 "Random block caused an unexpected exception:\n"
-                f"{data!r}"
+                f"{data!r}\n"
+                f"Exception: {type(exc).__name__}: {exc}"
             )
 
         assert isinstance(result, tuple)
@@ -182,7 +170,9 @@ def test_random_chain_candidates_use_only_block_objects(tmp_path):
     for _ in range(300):
         candidate = [chain.chain[0]]
 
-        length = rng.randint(0, 4)
+        # At least one random block is required.
+        # A chain containing only Genesis is valid.
+        length = rng.randint(1, 4)
 
         for _ in range(length):
             data = random_block_dict(rng)
@@ -199,18 +189,18 @@ def test_random_chain_candidates_use_only_block_objects(tmp_path):
 
             candidate.append(block)
 
+        # If all random blocks failed to deserialize,
+        # skip this candidate because it would contain only Genesis.
+        if len(candidate) == 1:
+            continue
+
         try:
             result = chain.validate_chain(candidate)
-        except (
-            KeyError,
-            TypeError,
-            ValueError,
-            AttributeError,
-            IndexError,
-        ):
+        except Exception as exc:
             assert False, (
                 "Random Block candidate caused an unexpected exception:\n"
-                f"{candidate!r}"
+                f"{candidate!r}\n"
+                f"Exception: {type(exc).__name__}: {exc}"
             )
 
         assert isinstance(result, tuple)
