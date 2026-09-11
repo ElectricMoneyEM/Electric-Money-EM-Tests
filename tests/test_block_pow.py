@@ -5,7 +5,10 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "electric_money_v14.py"
 
-spec = importlib.util.spec_from_file_location("electric_money_v14", MODULE_PATH)
+spec = importlib.util.spec_from_file_location(
+    "electric_money_v14",
+    MODULE_PATH,
+)
 em = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 sys.modules[spec.name] = em
@@ -32,7 +35,8 @@ def test_mined_block_satisfies_proof_of_work():
     assert block.block_hash == block.calculate_hash()
     assert block.block_hash.startswith("0" * block.difficulty)
 
-    def test_tampered_block_hash_is_detected():
+
+def test_tampered_block_hash_is_detected():
     block = Block(
         index=1,
         previous_hash="0" * 128,
