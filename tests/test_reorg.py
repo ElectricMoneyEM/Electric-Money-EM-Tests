@@ -64,7 +64,7 @@ def test_lighter_chain_is_not_adopted(tmp_path):
 
     fork.mine_pending(miner_fork)
 
-    assert main.chain_work(main.chain) > main.chain_work(fork.chain)
+    assert main.chain_work(main.chain) > fork.chain_work(fork.chain)
 
     old_tip = main.chain[-1].block_hash
 
@@ -216,8 +216,6 @@ def test_reorg_rebuilds_state_from_winning_chain(tmp_path):
     main.mine_pending(sender.address)
     fork.mine_pending(sender.address)
 
-    initial_balance = main.balances[sender.address]
-
     tx = em.Transaction(
         sender_pubkey=sender.public_key_hex,
         recipient=recipient.address,
@@ -247,10 +245,12 @@ def test_reorg_rebuilds_state_from_winning_chain(tmp_path):
     assert result is True
 
     # State must now come entirely from the winning chain.
-    assert main.balances[recipient.address] == 0
+    # V14 removes zero-balance addresses from the balances dictionary.
+    assert main.balances.get(recipient.address, 0) == 0
     assert main.nonces.get(sender.address, 0) == 0
 
-    # The sender has the balance produced by the winning chain.
+    # The winning fork contains three mining rewards for the sender:
+    # the first shared block plus two additional fork blocks.
     assert main.balances[sender.address] == 3 * em.BASE_REWARD
 
     # The orphaned transaction must be pending again.
