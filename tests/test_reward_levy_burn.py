@@ -1,4 +1,5 @@
 import importlib.util
+import time
 from pathlib import Path
 import sys
 
@@ -23,6 +24,7 @@ Blockchain = em.Blockchain
 Block = em.Block
 Wallet = em.Wallet
 Transaction = em.Transaction
+MerkleTree = em.MerkleTree
 
 
 def make_chain(tmp_path):
@@ -189,3 +191,408 @@ def test_annual_levy_total_is_exact():
     balance = 100_000
 
     assert Blockchain._annual_tax_due(balance) == 250
+
+
+# ============================================================
+# INTEGRATED REWARD / LEVY / BURN STATE TRANSITION TESTS
+# ============================================================
+
+
+def test_real_transfer_updates_balance_treasury_and_burn(tmp_path):
+    chain = make_chain(tmp_path)
+
+    sender = Wallet()
+    receiver = Wallet()
+    miner = Wallet()
+
+    now = int(time.time())
+    amount = 1_000_000
+
+    # Move an existing amount from the genesis allocation into
+    # the synthetic sender wallet so total supply is preserved.
+    chain.balances["Miner_Genesis"] -= amount
+    chain.balances[sender.address] = amount
+
+    chain.nonces[sender.address] = 0
+
+    # Prevent the synthetic test wallet and genesis wallet from
+    # becoming due for the annual levy during this block.
+    chain.wallet_tax_anchor["Miner_Genesis"] = now
+    chain.wallet_tax_anchor[sender.address] = now
+
+    tx = Transaction(
+        sender_pubkey=sender.public_key_hex,
+        recipient=receiver.address,
+        amount=amount,
+        nonce=0,
+        timestamp=now,
+    )
+
+    sender.sign_transaction(tx)
+
+    assert chain.add_transaction(tx)
+
+    issued_before = chain.total_issued
+    burned_before = chain.total_burned
+    treasury_before = chain.treasury_balance
+
+    chain.mine_pending(miner.address)
+
+    expected_burn = 500
+    expected_treasury = 2_000
+    expected_net = 997_500
+
+    assert chain.balances[sender.address] == 0
+    assert chain.balances[receiver.address] == expected_net
+
+    assert chain.total_burned - burned_before == expected_burn
+    assert chain.treasury_balance - treasury_before == expected_treasury
+
+    # The transfer itself must not create new monetary issuance.
+    assert chain.total_issued == issued_before
+
+    # The miner receives only the normal block subsidy.
+    assert chain.balances[miner.address] == 25 * em.COIN
+
+
+def test_transfer_sender_pays_full_amount(tmp_path):
+    chain = make_chain(tmp_path)
+
+    sender = Wallet()
+    receiver = Wallet()
+    miner = Wallet()
+
+    now = int(time.time())
+    amount = 2_000_000
+
+    chain.balances["Miner_Genesis"] -= amount
+    chain.balances[sender.address] = amount
+
+    chain.nonces[sender.address] = 0
+    chain.wallet_tax_anchor["Miner_Genesis"] = now
+    chain.wallet_tax_anchor[sender.address] = now
+
+    tx = Transaction(
+        sender_pubkey=sender.public_key_hex,
+        recipient=receiver.address,
+        amount=amount,
+        nonce=0,
+        timestamp=now,
+    )
+
+    sender.sign_transaction(tx)
+
+    assert chain.add_transaction(tx)
+
+    chain.mine_pending(miner.address)
+
+    assert chain.balances[sender.address] == 0
+
+    # Receiver gets only amount minus Treasury tax and burn.
+    assert chain.balances[receiver.address] == (
+        amount
+        - tx.receiver_tax()
+        - tx.burned()
+    )
+
+
+def test_annual_levy_really_changes_wallet_state():
+    address = "a" * 128
+
+    balance = 1_000_000
+    anchor = 10_000
+    timestamp = anchor + em.YEAR_SECONDS
+
+    balances = {
+        address: balance,
+    }
+
+    anchors = {
+        address: anchor,
+    }
+
+    treasury_before = 0
+
+    treasury_after, burned, new_anchors = (
+        Blockchain._apply_annual_wallet_taxes(
+            balances,
+            anchors,
+            treasury_before,
+            timestamp,
+        )
+    )
+
+    assert balances[address] == 997_500
+    assert treasury_after == 2_000
+    assert burned == 500
+    assert new_anchors[address] == timestamp
+
+
+def test_annual_levy_does_not_apply_before_anniversary():
+    address = "b" * 128
+
+    balance = 1_000_000
+    anchor = 10_000
+    timestamp = anchor + em.YEAR_SECONDS - 1
+
+    balances = {
+        address: balance,
+    }
+
+    anchors = {
+        address: anchor,
+    }
+
+    treasury_after, burned, new_anchors = (
+        Blockchain._apply_annual_wallet_taxes(
+            balances,
+            anchors,
+            0,
+            timestamp,
+        )
+    )
+
+    assert balances[address] == balance
+    assert treasury_after == 0
+    assert burned == 0
+    assert new_anchors[address] == anchor
+
+
+def test_annual_levy_anchor_advances_by_exact_years():
+    address = "c" * 128
+
+    balance = 1_000_000
+    anchor = 10_000
+    timestamp = anchor + (2 * em.YEAR_SECONDS) + 123
+
+    balances = {
+        address: balance,
+    }
+
+    anchors = {
+        address: anchor,
+    }
+
+    treasury_after, burned, new_anchors = (
+        Blockchain._apply_annual_wallet_taxes(
+            balances,
+            anchors,
+            0,
+            timestamp,
+        )
+    )
+
+    # First year:
+    # Treasury = 2,000
+    # Burn = 500
+    # Remaining = 997,500
+    #
+    # Second year:
+    # Treasury = 1,995
+    # Burn = 498
+    #
+    # Final:
+    # Treasury = 3,995
+    # Burn = 998
+    # Balance = 995,007
+
+    assert balances[address] == 995_007
+    assert treasury_after == 3_995
+    assert burned == 998
+    assert new_anchors[address] == anchor + (2 * em.YEAR_SECONDS)
+
+
+def test_reward_increases_total_issued_exactly_once(tmp_path):
+    chain = make_chain(tmp_path)
+    miner = Wallet()
+
+    issued_before = chain.total_issued
+
+    block = mine_valid_candidate(chain, miner)
+
+    ok, reason, new_state = chain.validate_block(
+        block,
+        chain.chain[-1],
+        state_before(chain),
+        chain.chain,
+    )
+
+    assert ok
+    assert reason == "ok"
+
+    issued_after = new_state[2]
+
+    assert issued_after - issued_before == 25 * em.COIN
+
+
+def test_final_supply_unit_can_be_issued_without_exceeding_cap(tmp_path):
+    chain = make_chain(tmp_path)
+
+    miner = Wallet()
+    timestamp = int(time.time())
+
+    state = (
+        {},
+        {},
+        em.MAX_SUPPLY - 1,
+        0,
+        0,
+        {},
+        {miner.address: timestamp},
+    )
+
+    issuance = 1
+
+    reward = {
+        "type": "reward",
+        "tx_id": chain.reward_id(
+            miner.address,
+            issuance,
+            issuance,
+            1,
+        ),
+        "recipient": miner.address,
+        "amount": issuance,
+        "issuance": issuance,
+    }
+
+    block = Block(
+        index=1,
+        previous_hash=chain.chain[-1].block_hash,
+        transactions=[reward],
+        timestamp=timestamp,
+        nonce=0,
+        difficulty=chain.expected_difficulty(chain.chain, 1),
+        merkle_root=MerkleTree.compute_root(
+            [reward["tx_id"]]
+        ),
+        extra_data="ELECTRIC-MONEY-CAP-TEST",
+    )
+
+    block.mine()
+
+    ok, reason, new_state = chain.validate_block(
+        block,
+        chain.chain[-1],
+        state,
+        chain.chain,
+        now=timestamp,
+    )
+
+    assert ok
+    assert reason == "ok"
+    assert new_state[2] == em.MAX_SUPPLY
+
+
+def test_reward_cannot_issue_above_hard_cap(tmp_path):
+    chain = make_chain(tmp_path)
+
+    miner = Wallet()
+    timestamp = int(time.time())
+
+    state = (
+        {},
+        {},
+        em.MAX_SUPPLY,
+        0,
+        0,
+        {},
+        {miner.address: timestamp},
+    )
+
+    reward = {
+        "type": "reward",
+        "tx_id": chain.reward_id(
+            miner.address,
+            1,
+            1,
+            1,
+        ),
+        "recipient": miner.address,
+        "amount": 1,
+        "issuance": 1,
+    }
+
+    block = Block(
+        index=1,
+        previous_hash=chain.chain[-1].block_hash,
+        transactions=[reward],
+        timestamp=timestamp,
+        nonce=0,
+        difficulty=chain.expected_difficulty(chain.chain, 1),
+        merkle_root=MerkleTree.compute_root(
+            [reward["tx_id"]]
+        ),
+        extra_data="ELECTRIC-MONEY-CAP-TEST",
+    )
+
+    block.mine()
+
+    ok, reason, _ = chain.validate_block(
+        block,
+        chain.chain[-1],
+        state,
+        chain.chain,
+        now=timestamp,
+    )
+
+    assert not ok
+
+    # Once the hard cap is already reached, consensus issuance is zero.
+    assert reason == "invalid reward issuance"
+
+
+def test_treasury_distribution_uses_verified_miner_work():
+    miner_a = "a" * 128
+    miner_b = "b" * 128
+
+    balances = {
+        miner_a: 0,
+        miner_b: 0,
+    }
+
+    miner_work = {
+        miner_a: 1,
+        miner_b: 3,
+    }
+
+    treasury = 10_000
+
+    remaining, remaining_work = Blockchain._distribute_treasury(
+        balances,
+        treasury,
+        miner_work,
+    )
+
+    assert remaining == 0
+    assert remaining_work == {}
+
+    assert balances[miner_a] == 2_500
+    assert balances[miner_b] == 7_500
+
+
+def test_monthly_treasury_sweep_occurs_at_epoch():
+    miner = "d" * 128
+
+    balances = {
+        miner: 0,
+    }
+
+    miner_work = {
+        miner: 1,
+    }
+
+    treasury = 10_000
+
+    block_index = em.MINER_REWARD_EPOCH_BLOCKS
+
+    remaining, remaining_work = Blockchain._end_month_if_needed(
+        balances,
+        treasury,
+        miner_work,
+        block_index,
+    )
+
+    assert remaining == 0
+    assert remaining_work == {}
+    assert balances[miner] == 10_000
