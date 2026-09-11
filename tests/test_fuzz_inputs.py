@@ -93,7 +93,7 @@ def random_block_dict(rng):
 
 
 def test_random_transaction_inputs_do_not_crash(tmp_path):
-    rng = random.Random(0xEM2026 if False else 0xE11EC7)
+    rng = random.Random(0xE11EC7)
 
     chain = make_chain(tmp_path)
 
@@ -102,12 +102,23 @@ def test_random_transaction_inputs_do_not_crash(tmp_path):
 
         try:
             tx = em.Transaction.from_dict(data)
-        except (KeyError, TypeError, ValueError, AttributeError):
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            AttributeError,
+        ):
             continue
 
         try:
             result = chain.validate_transaction(tx)
-        except (KeyError, TypeError, ValueError, AttributeError, IndexError):
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            AttributeError,
+            IndexError,
+        ):
             assert False, (
                 "Random transaction caused an unexpected exception:\n"
                 f"{data!r}"
@@ -127,7 +138,12 @@ def test_random_block_inputs_do_not_crash(tmp_path):
 
         try:
             block = em.Block.from_dict(data)
-        except (KeyError, TypeError, ValueError, AttributeError):
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            AttributeError,
+        ):
             continue
 
         try:
@@ -163,7 +179,12 @@ def test_random_chain_candidates_do_not_crash(tmp_path):
 
             try:
                 block = em.Block.from_dict(data)
-            except (KeyError, TypeError, ValueError, AttributeError):
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                AttributeError,
+            ):
                 block = random_value(rng)
 
             candidate.append(block)
