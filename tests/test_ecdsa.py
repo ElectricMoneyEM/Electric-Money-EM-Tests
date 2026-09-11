@@ -1,44 +1,59 @@
 import hashlib
 import importlib.util
-import sys
 from pathlib import Path
+import sys
 
 import pytest
+from ecdsa import SECP256k1, SigningKey
 
 
-# Load the actual Electric Money V14 source file.
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "electric_money_v14.py"
+MODULE_PATH = ROOT / "electric_money_v14.py"
 
 spec = importlib.util.spec_from_file_location(
     "electric_money_v14",
-    SOURCE,
+    MODULE_PATH,
 )
 
 em = importlib.util.module_from_spec(spec)
 
-# Required so that dataclasses and other module-level
-# Python features can correctly resolve the module.
+assert spec.loader is not None
+
+# Necessario per il corretto funzionamento di @dataclass
 sys.modules[spec.name] = em
 
 spec.loader.exec_module(em)
-
 
 Wallet = em.Wallet
 Transaction = em.Transaction
 
 
+def make_transaction(
+    sender,
+    recipient,
+    amount=1000,
+    nonce=1,
+    timestamp=1_700_000_000,
+):
+    return Transaction(
+        sender_pubkey=sender.public_key_hex,
+        recipient=recipient.address,
+        amount=amount,
+        nonce=nonce,
+        timestamp=timestamp,
+    )
+
+
 def test_secp256k1_curve_is_used():
     wallet = Wallet()
 
-    assert wallet._private_key.curve.name == "SECP256k1"
+    assert wallet._private_key.curve.name == SECP256k1.name
 
 
 def test_wallet_sign_and_verify():
     wallet = Wallet()
 
-    message = b"Electric Money ECDSA test"
-
+    message = b"Electric Money"
     signature = wallet.sign(message)
 
     assert Wallet.verify(
@@ -51,28 +66,24 @@ def test_wallet_sign_and_verify():
 def test_wrong_message_is_rejected():
     wallet = Wallet()
 
-    message = b"original message"
-    wrong_message = b"modified message"
-
-    signature = wallet.sign(message)
+    signature = wallet.sign(b"Electric Money")
 
     assert not Wallet.verify(
         wallet.public_key_hex,
-        wrong_message,
+        b"Tampered message",
         signature,
     )
 
 
 def test_wrong_public_key_is_rejected():
-    wallet_a = Wallet()
-    wallet_b = Wallet()
+    wallet = Wallet()
+    other_wallet = Wallet()
 
     message = b"Electric Money"
-
-    signature = wallet_a.sign(message)
+    signature = wallet.sign(message)
 
     assert not Wallet.verify(
-        wallet_b.public_key_hex,
+        other_wallet.public_key_hex,
         message,
         signature,
     )
@@ -82,11 +93,10 @@ def test_tampered_signature_is_rejected():
     wallet = Wallet()
 
     message = b"Electric Money"
-
     signature = wallet.sign(message)
 
     tampered = bytearray.fromhex(signature)
-    tampered[0] ^= 1
+    tampered[-1] ^= 1
 
     assert not Wallet.verify(
         wallet.public_key_hex,
@@ -98,27 +108,24 @@ def test_tampered_signature_is_rejected():
 def test_malformed_signature_is_rejected():
     wallet = Wallet()
 
-    message = b"Electric Money"
-
     assert not Wallet.verify(
         wallet.public_key_hex,
-        message,
+        b"Electric Money",
         "00",
     )
 
 
 def test_public_key_tampering_is_rejected():
     wallet = Wallet()
+    other_wallet = Wallet()
 
     message = b"Electric Money"
-
     signature = wallet.sign(message)
 
-    public_key = bytearray.fromhex(wallet.public_key_hex)
-    public_key[-1] ^= 1
-
+    # Use another valid public key instead of randomly corrupting
+    # a key and creating an invalid elliptic-curve point.
     assert not Wallet.verify(
-        bytes(public_key).hex(),
+        other_wallet.public_key_hex,
         message,
         signature,
     )
@@ -127,21 +134,21 @@ def test_public_key_tampering_is_rejected():
 def test_deterministic_signature():
     wallet = Wallet()
 
-    message = b"deterministic Electric Money message"
+    message = b"Electric Money deterministic test"
 
-    signature_1 = wallet.sign(message)
-    signature_2 = wallet.sign(message)
+    sig1 = wallet.sign(message)
+    sig2 = wallet.sign(message)
 
-    assert signature_1 == signature_2
+    assert sig1 == sig2
 
 
 def test_different_messages_produce_different_signatures():
     wallet = Wallet()
 
-    signature_1 = wallet.sign(b"message one")
-    signature_2 = wallet.sign(b"message two")
+    sig1 = wallet.sign(b"message one")
+    sig2 = wallet.sign(b"message two")
 
-    assert signature_1 != signature_2
+    assert sig1 != sig2
 
 
 def test_address_derivation():
@@ -152,58 +159,55 @@ def test_address_derivation():
     ).hexdigest()
 
     assert wallet.address == expected
+    assert Wallet.address_from_pubkey(
+        wallet.public_key_hex
+    ) == expected
 
 
 def test_transaction_signature_verifies():
     sender = Wallet()
     recipient = Wallet()
 
-    tx = Transaction(
-        sender_pubkey=sender.public_key_hex,
-        recipient=recipient.address,
-        amount=1000,
-        nonce=1,
+    tx = make_transaction(
+        sender,
+        recipient,
     )
 
-    signed_tx = sender.sign_transaction(tx)
+    sender.sign_transaction(tx)
 
     assert Wallet.verify(
         sender.public_key_hex,
-        signed_tx.signing_bytes(),
-        signed_tx.signature,
+        tx.signing_bytes(),
+        tx.signature,
     )
 
 
 @pytest.mark.parametrize(
-    "field, new_value",
+    "field,new_value",
     [
         ("amount", 2000),
         ("nonce", 999),
-        ("timestamp", 9999999999),
-        ("recipient", "tampered_recipient"),
+        ("timestamp", 1_700_000_001),
+        ("recipient", "b" * 128),
     ],
 )
 def test_transaction_tampering_is_rejected(field, new_value):
     sender = Wallet()
     recipient = Wallet()
 
-    tx = Transaction(
-        sender_pubkey=sender.public_key_hex,
-        recipient=recipient.address,
-        amount=1000,
-        nonce=1,
+    tx = make_transaction(
+        sender,
+        recipient,
     )
 
     sender.sign_transaction(tx)
-
-    original_signature = tx.signature
 
     setattr(tx, field, new_value)
 
     assert not Wallet.verify(
         sender.public_key_hex,
         tx.signing_bytes(),
-        original_signature,
+        tx.signature,
     )
 
 
@@ -212,23 +216,19 @@ def test_transaction_sender_pubkey_tampering_is_rejected():
     attacker = Wallet()
     recipient = Wallet()
 
-    tx = Transaction(
-        sender_pubkey=sender.public_key_hex,
-        recipient=recipient.address,
-        amount=1000,
-        nonce=1,
+    tx = make_transaction(
+        sender,
+        recipient,
     )
 
     sender.sign_transaction(tx)
 
-    original_signature = tx.signature
-
     tx.sender_pubkey = attacker.public_key_hex
 
     assert not Wallet.verify(
-        attacker.public_key_hex,
+        tx.sender_pubkey,
         tx.signing_bytes(),
-        original_signature,
+        tx.signature,
     )
 
 
@@ -236,42 +236,41 @@ def test_transaction_txid_changes_when_signature_changes():
     sender = Wallet()
     recipient = Wallet()
 
-    tx = Transaction(
-        sender_pubkey=sender.public_key_hex,
-        recipient=recipient.address,
-        amount=1000,
-        nonce=1,
+    tx = make_transaction(
+        sender,
+        recipient,
     )
 
     sender.sign_transaction(tx)
 
     original_txid = tx.tx_id
 
-    tampered_signature = bytearray.fromhex(tx.signature)
-    tampered_signature[0] ^= 1
+    tampered_signature = bytearray.fromhex(
+        tx.signature
+    )
+
+    tampered_signature[-1] ^= 1
 
     tx.signature = bytes(tampered_signature).hex()
 
-    new_txid = tx.calculate_id()
-
-    assert new_txid != original_txid
+    assert tx.calculate_id() != original_txid
 
 
-def test_direct_secp256k1_round_trip():
-    private_key = em.SigningKey.generate(
-        curve=em.SECP256k1
+def test_direct_secp256k1_library_round_trip():
+    signing_key = SigningKey.generate(
+        curve=SECP256k1
     )
 
-    public_key = private_key.verifying_key
+    verifying_key = signing_key.verifying_key
 
-    message = b"direct secp256k1 test"
+    message = b"Electric Money / SECP256k1"
 
-    signature = private_key.sign_deterministic(
+    signature = signing_key.sign_deterministic(
         message,
         hashfunc=hashlib.sha3_512,
     )
 
-    assert public_key.verify(
+    assert verifying_key.verify(
         signature,
         message,
         hashfunc=hashlib.sha3_512,
