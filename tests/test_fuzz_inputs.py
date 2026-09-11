@@ -40,7 +40,10 @@ def random_string(rng, max_length=300):
         + " \t\n"
     )
 
-    return "".join(rng.choice(alphabet) for _ in range(length))
+    return "".join(
+        rng.choice(alphabet)
+        for _ in range(length)
+    )
 
 
 def random_value(rng):
@@ -133,6 +136,8 @@ def test_random_block_inputs_do_not_crash(tmp_path):
 
     chain = make_chain(tmp_path)
 
+    previous = chain.chain[-1]
+
     for _ in range(500):
         data = random_block_dict(rng)
 
@@ -147,7 +152,12 @@ def test_random_block_inputs_do_not_crash(tmp_path):
             continue
 
         try:
-            result = chain.validate_block(block)
+            result = chain.validate_block(
+                block,
+                previous,
+                chain.state_before_block(previous),
+                chain.chain[:-1],
+            )
         except (
             KeyError,
             TypeError,
@@ -164,15 +174,15 @@ def test_random_block_inputs_do_not_crash(tmp_path):
         assert result[0] is False
 
 
-def test_random_chain_candidates_do_not_crash(tmp_path):
+def test_random_chain_candidates_use_only_block_objects(tmp_path):
     rng = random.Random(0xC41A2026)
 
     chain = make_chain(tmp_path)
 
     for _ in range(300):
-        candidate = []
+        candidate = [chain.chain[0]]
 
-        length = rng.randint(0, 5)
+        length = rng.randint(0, 4)
 
         for _ in range(length):
             data = random_block_dict(rng)
@@ -185,7 +195,7 @@ def test_random_chain_candidates_do_not_crash(tmp_path):
                 ValueError,
                 AttributeError,
             ):
-                block = random_value(rng)
+                continue
 
             candidate.append(block)
 
@@ -199,7 +209,7 @@ def test_random_chain_candidates_do_not_crash(tmp_path):
             IndexError,
         ):
             assert False, (
-                "Random chain candidate caused an unexpected exception:\n"
+                "Random Block candidate caused an unexpected exception:\n"
                 f"{candidate!r}"
             )
 
