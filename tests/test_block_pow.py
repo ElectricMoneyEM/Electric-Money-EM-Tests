@@ -233,3 +233,140 @@ def test_future_timestamp_is_rejected(tmp_path):
 
     assert not ok
     assert reason == "timestamp too far in future"
+
+
+def test_timestamp_below_median_time_past_is_rejected(tmp_path):
+    chain = make_chain(tmp_path)
+    miner = Wallet()
+
+    block = mine_valid_candidate(chain, miner)
+
+    median_time = chain.median_time_past(chain.chain)
+
+    block.timestamp = median_time - 1
+
+    ok, reason, _ = chain.validate_block(
+        block,
+        chain.chain[-1],
+        state_before(chain),
+        chain.chain,
+    )
+
+    assert not ok
+    assert reason == "timestamp below median-time-past"
+
+
+def test_nonce_tampering_invalidates_block_hash(tmp_path):
+    chain = make_chain(tmp_path)
+    miner = Wallet()
+
+    block = mine_valid_candidate(chain, miner)
+
+    original_hash = block.block_hash
+
+    block.nonce += 1
+
+    assert block.block_hash == original_hash
+    assert block.calculate_hash() != original_hash
+
+    ok, reason, _ = chain.validate_block(
+        block,
+        chain.chain[-1],
+        state_before(chain),
+        chain.chain,
+    )
+
+    assert not ok
+    assert reason == "invalid block hash"
+
+
+def test_block_size_limit_is_enforced(tmp_path):
+    chain = make_chain(tmp_path)
+    miner = Wallet()
+
+    block = mine_valid_candidate(chain, miner)
+
+    block.extra_data = "X" * (em.MAX_BLOCK_BYTES + 1)
+
+    ok, reason, _ = chain.validate_block(
+        block,
+        chain.chain[-1],
+        state_before(chain),
+        chain.chain,
+    )
+
+    assert not ok
+    assert reason == "block too large"
+
+
+def test_transaction_count_limit_is_enforced(tmp_path):
+    chain = make_chain(tmp_path)
+    miner = Wallet()
+
+    reward = chain.build_candidate_block(miner.address).transactions[-1]
+
+    max_allowed = em.MAX_TX_PER_BLOCK + em.MAX_SHARES_PER_BLOCK + 2
+
+    transactions = [
+        {
+            "type": "l2_commitment",
+            "tx_id": f"{i:0128x}"[-128:],
+            "root": "0" * 128,
+            "count": 0,
+            "first_sequence": 0,
+            "last_sequence": 0,
+            "state_root": "0" * 128,
+        }
+        for i in range(max_allowed)
+    ]
+
+    transactions.append(reward)
+
+    block = Block(
+        index=1,
+        previous_hash=chain.chain[-1].block_hash,
+        transactions=transactions,
+        timestamp=chain.median_time_past(chain.chain),
+        nonce=0,
+        difficulty=chain.expected_difficulty(chain.chain, 1),
+        merkle_root=MerkleTree.compute_root(
+            [
+                tx.get("tx_id") or tx.get("share_id")
+                for tx in transactions
+            ]
+        ),
+        extra_data="ELECTRIC-MONEY-PoW-TEST",
+    )
+
+    ok, reason, _ = chain.validate_block(
+        block,
+        chain.chain[-1],
+        state_before(chain),
+        chain.chain,
+    )
+
+    assert not ok
+    assert reason == "too many transactions"
+
+
+def test_block_header_hash_matches_all_header_fields(tmp_path):
+    chain = make_chain(tmp_path)
+    miner = Wallet()
+
+    block = mine_valid_candidate(chain, miner)
+
+    original_hash = block.block_hash
+
+    block.extra_data = block.extra_data + "-tampered"
+
+    assert block.calculate_hash() != original_hash
+
+    ok, reason, _ = chain.validate_block(
+        block,
+        chain.chain[-1],
+        state_before(chain),
+        chain.chain,
+    )
+
+    assert not ok
+    assert reason == "invalid block hash"
