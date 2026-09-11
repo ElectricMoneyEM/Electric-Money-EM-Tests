@@ -6,6 +6,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "electric_money_v14.py"
 
+
 spec = importlib.util.spec_from_file_location(
     "electric_money_v14",
     MODULE_PATH,
