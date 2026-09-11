@@ -36,4 +36,4 @@ jobs:
         env:
           PYTHONPATH: .
         run: |
-          pytest -q tests/test_ecdsa.py
+          pytest -q tests/
