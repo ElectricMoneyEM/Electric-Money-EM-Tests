@@ -151,3 +151,107 @@ def test_receive_block_adopts_heavier_fork(tmp_path):
     assert result_2 == "reorged"
     assert main.chain[-1].block_hash == fork_block_2.block_hash
     assert len(main.chain) == 3
+
+
+def test_reorg_requeues_orphaned_transfer(tmp_path):
+    main = make_chain(tmp_path, "main_tx")
+    fork = make_chain(tmp_path, "fork_tx")
+
+    sender = Wallet()
+    recipient = Wallet()
+
+    # Give the sender funds on both chains.
+    main.mine_pending(sender.address)
+    fork.mine_pending(sender.address)
+
+    # Create and sign a real transaction.
+    tx = em.Transaction(
+        sender_pubkey=sender.public_key_hex,
+        recipient=recipient.address,
+        amount=1 * em.COIN,
+        nonce=0,
+        timestamp=int(em.time.time()),
+    )
+    sender.sign_transaction(tx)
+
+    # Put the transaction in the main-chain mempool.
+    assert main.add_transaction(tx) is True
+    assert tx.tx_id in main.pending
+
+    # Mine the transaction into the current main chain.
+    main.mine_pending(sender.address)
+
+    assert tx.tx_id not in main.pending
+
+    # Build a heavier competing chain WITHOUT the transaction.
+    fork.mine_pending(sender.address)
+    fork.mine_pending(sender.address)
+
+    assert fork.chain_work(fork.chain) > main.chain_work(main.chain)
+
+    # Reorg to the heavier chain.
+    result = main.try_replace_chain(fork.chain)
+
+    assert result is True
+
+    # The transaction disappeared from the winning chain,
+    # so it must be returned to the mempool.
+    assert tx.tx_id not in {
+        raw.get("tx_id")
+        for block in main.chain
+        for raw in block.transactions
+    }
+
+    assert tx.tx_id in main.pending
+
+
+def test_reorg_rebuilds_state_from_winning_chain(tmp_path):
+    main = make_chain(tmp_path, "main_state")
+    fork = make_chain(tmp_path, "fork_state")
+
+    sender = Wallet()
+    recipient = Wallet()
+
+    # Both chains give the sender the same initial mining reward.
+    main.mine_pending(sender.address)
+    fork.mine_pending(sender.address)
+
+    initial_balance = main.balances[sender.address]
+
+    tx = em.Transaction(
+        sender_pubkey=sender.public_key_hex,
+        recipient=recipient.address,
+        amount=1 * em.COIN,
+        nonce=0,
+        timestamp=int(em.time.time()),
+    )
+    sender.sign_transaction(tx)
+
+    assert main.add_transaction(tx) is True
+
+    # The transaction becomes part of the main chain.
+    main.mine_pending(sender.address)
+
+    assert main.balances[recipient.address] == tx.net_amount()
+    assert main.nonces[sender.address] == 1
+
+    # The competing chain does not contain the transaction,
+    # but becomes heavier.
+    fork.mine_pending(sender.address)
+    fork.mine_pending(sender.address)
+
+    assert fork.chain_work(fork.chain) > main.chain_work(main.chain)
+
+    result = main.try_replace_chain(fork.chain)
+
+    assert result is True
+
+    # State must now come entirely from the winning chain.
+    assert main.balances[recipient.address] == 0
+    assert main.nonces.get(sender.address, 0) == 0
+
+    # The sender has the balance produced by the winning chain.
+    assert main.balances[sender.address] == 3 * em.BASE_REWARD
+
+    # The orphaned transaction must be pending again.
+    assert tx.tx_id in main.pending
