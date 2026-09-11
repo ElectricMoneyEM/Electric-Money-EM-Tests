@@ -72,59 +72,56 @@ def test_lighter_valid_chain_is_not_adopted(tmp_path):
 
 
 def test_heavier_valid_chain_is_adopted(tmp_path):
-    chain = make_chain(tmp_path)
+    main = make_chain(tmp_path, "main.json")
+    fork = make_chain(tmp_path, "fork.json")
 
     miner_a = Wallet()
     miner_b = Wallet()
 
-    mine_block(chain, miner_a)
+    # Main chain: genesis + 1 block
+    mine_block(main, miner_a)
 
-    original_tip = chain.chain[-1].block_hash
-    original_work = chain.cumulative_work
+    # Alternative chain: same genesis + 2 valid blocks
+    mine_block(fork, miner_b)
+    mine_block(fork, miner_b)
 
-    alternative = list(chain.chain)
+    candidate = list(fork.chain)
 
-    block = chain.build_candidate_block(miner_b.address)
+    assert candidate[0].block_hash == main.chain[0].block_hash
 
-    # Force the alternative block to use a higher valid PoW difficulty.
-    block.difficulty = block.difficulty + 1
-    block.mine()
+    assert main.chain_work(candidate) > main.cumulative_work
 
-    alternative.append(block)
+    assert fork.validate_chain(candidate)[0]
 
-    assert alternative[-1].previous_hash == original_tip
-    assert chain.chain_work(alternative) > original_work
+    assert main.try_replace_chain(candidate) is True
 
-    assert chain.validate_chain(alternative)[0]
+    assert main.chain[-1].block_hash == fork.chain[-1].block_hash
 
-    assert chain.try_replace_chain(alternative) is True
-
-    assert chain.chain[-1].block_hash == block.block_hash
-    assert chain.cumulative_work == chain.chain_work(alternative)
+    assert main.cumulative_work == main.chain_work(candidate)
 
 
 def test_invalid_heavier_chain_is_rejected(tmp_path):
-    chain = make_chain(tmp_path)
+    main = make_chain(tmp_path, "main.json")
+    fork = make_chain(tmp_path, "fork.json")
 
     miner_a = Wallet()
     miner_b = Wallet()
 
-    mine_block(chain, miner_a)
+    # Main chain: genesis + 1 block
+    mine_block(main, miner_a)
 
-    alternative = list(chain.chain)
+    # Alternative chain: genesis + 2 blocks
+    mine_block(fork, miner_b)
+    mine_block(fork, miner_b)
 
-    block = chain.build_candidate_block(miner_b.address)
+    alternative = list(fork.chain)
 
-    block.difficulty = block.difficulty + 1
-    block.mine()
+    # The chain has more cumulative work,
+    # but we deliberately corrupt the second block.
+    alternative[-1].previous_hash = "f" * 128
 
-    # The block has valid PoW, but we deliberately break its linkage.
-    block.previous_hash = "f" * 128
+    assert main.chain_work(alternative) > main.cumulative_work
 
-    alternative.append(block)
+    assert main.try_replace_chain(alternative) is False
 
-    assert chain.chain_work(alternative) > chain.cumulative_work
-
-    assert chain.try_replace_chain(alternative) is False
-
-    assert chain.chain[-1].block_hash != block.block_hash
+    assert main.chain[-1].block_hash != alternative[-1].block_hash
