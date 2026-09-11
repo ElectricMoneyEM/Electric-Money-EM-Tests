@@ -356,7 +356,7 @@ def test_zero_amount_is_rejected():
     [
         ("amount", 2001),
         ("nonce", 1),
-        ("timestamp", int(time.time()) + 1),
+        ("timestamp", int(time.time()) + 60),
     ],
 )
 def test_signed_transaction_cannot_be_modified(
