@@ -261,8 +261,6 @@ def test_out_of_order_block_is_stored_as_orphan(tmp_path):
     main = make_chain(tmp_path, "out_of_order")
 
     miner = Wallet()
-
-    # Build two blocks on a separate valid chain.
     source = make_chain(tmp_path, "source")
 
     source.mine_pending(miner.address)
@@ -290,49 +288,81 @@ def test_known_block_is_ignored(tmp_path):
     assert block.block_hash not in main.orphans
 
 
-def test_out_of_order_fork_reorgs_when_parent_arrives(tmp_path):
+def test_out_of_order_fork_reorgs_incrementally(tmp_path):
     main = make_chain(tmp_path, "main_out_of_order")
     fork = make_chain(tmp_path, "fork_out_of_order")
 
     miner = Wallet()
 
-    # Mine the first block on both chains.
-    #
-    # With the same miner and no transactions, the first block
-    # can be identical when produced within the same timestamp.
+    # Main chain.
     main.mine_pending(miner.address)
 
+    # Build a three-block fork.
     fork.mine_pending(miner.address)
     fork.mine_pending(miner.address)
     fork.mine_pending(miner.address)
 
-    # The deepest block arrives first.
-    result_3 = main.receive_block(fork.chain[3])
+    block_1 = fork.chain[1]
+    block_2 = fork.chain[2]
+    block_3 = fork.chain[3]
 
-    assert result_3 == "orphan"
-    assert fork.chain[3].block_hash in main.orphans
+    # ---------------------------------------------------------
+    # Step 1: deepest block arrives before its parent.
+    # ---------------------------------------------------------
+    result_3_first = main.receive_block(block_3)
 
-    # The middle block arrives next.
+    assert result_3_first == "orphan"
+    assert block_3.block_hash in main.orphans
+
+    # The canonical chain must still be unchanged.
+    assert main.chain[-1].block_hash != block_3.block_hash
+
+    # ---------------------------------------------------------
+    # Step 2: parent block arrives.
     #
-    # V14 can now connect the received block to the canonical
-    # first block and also recover the already stored descendant.
-    result_2 = main.receive_block(fork.chain[2])
+    # V14 connects block 2 to the canonical chain and performs
+    # a reorg to block 2.
+    #
+    # The previously stored block 3 remains an orphan.
+    # ---------------------------------------------------------
+    result_2 = main.receive_block(block_2)
 
     assert result_2 == "reorged"
 
-    # The node must now have adopted the heavier fork.
-    assert main.chain[-1].block_hash == fork.chain[3].block_hash
+    # The tip must now be block 2, not block 3.
+    assert main.chain[-1].block_hash == block_2.block_hash
+    assert len(main.chain) == 3
+
+    # Block 3 must still be waiting as an orphan.
+    assert block_3.block_hash in main.orphans
+
+    # ---------------------------------------------------------
+    # Step 3: send block 3 again.
+    #
+    # Its parent is now canonical, so V14 can extend the
+    # winning chain to block 3.
+    # ---------------------------------------------------------
+    result_3_second = main.receive_block(block_3)
+
+    assert result_3_second == "reorged"
+
+    # Now the complete fork is canonical.
+    assert main.chain[-1].block_hash == block_3.block_hash
     assert len(main.chain) == 4
 
-    # The first block of the fork is already part of the adopted
-    # chain, so delivering it again must report "known".
-    result_1 = main.receive_block(fork.chain[1])
+    # ---------------------------------------------------------
+    # Step 4: block 1 is already part of the canonical chain.
+    # Sending it again must therefore return "known".
+    # ---------------------------------------------------------
+    result_1 = main.receive_block(block_1)
 
     assert result_1 == "known"
 
-    # The final chain must remain intact.
+    # Final consistency checks.
     assert main.chain[0].index == 0
-    assert main.chain[-1].index == 3
+    assert main.chain[1].block_hash == block_1.block_hash
+    assert main.chain[2].block_hash == block_2.block_hash
+    assert main.chain[3].block_hash == block_3.block_hash
 
 
 def test_heavier_fork_with_multiple_blocks_is_adopted(tmp_path):
