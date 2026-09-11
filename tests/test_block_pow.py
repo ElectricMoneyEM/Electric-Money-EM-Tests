@@ -31,6 +31,7 @@ def test_mined_block_satisfies_proof_of_work():
     assert block.block_hash
     assert block.block_hash == block.calculate_hash()
     assert block.block_hash.startswith("0" * block.difficulty)
+
     def test_tampered_block_hash_is_detected():
     block = Block(
         index=1,
@@ -47,7 +48,6 @@ def test_mined_block_satisfies_proof_of_work():
 
     original_hash = block.block_hash
 
-    # Tamper with a field that belongs to the block header.
     block.extra_data = "tampered"
 
     assert block.block_hash == original_hash
