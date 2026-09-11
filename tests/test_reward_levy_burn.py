@@ -248,10 +248,11 @@ def test_real_transfer_updates_balance_treasury_and_burn(tmp_path):
     assert chain.total_burned - burned_before == expected_burn
     assert chain.treasury_balance - treasury_before == expected_treasury
 
-    # The transfer itself must not create new monetary issuance.
-    assert chain.total_issued == issued_before
+    # The transfer itself must not create new issuance.
+    # The block reward, however, legitimately issues 25 EM.
+    assert chain.total_issued - issued_before == 25 * em.COIN
 
-    # The miner receives only the normal block subsidy.
+    # The miner receives the normal block subsidy.
     assert chain.balances[miner.address] == 25 * em.COIN
 
 
